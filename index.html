@@ -3,68 +3,281 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Canvas Curve Art - Corrected</title>
+    <title>Twisted Surface Lines</title>
     <style>
         body {
             margin: 0;
+            padding: 0;
+            background: white;
             overflow: hidden;
-            background-color: #ffffff;
         }
-        canvas {
-            display: block;
+        
+        #canvas {
+            width: 100vw;
+            height: 100vh;
         }
     </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.9/dat.gui.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 </head>
 <body>
-    <canvas id="myCanvas"></canvas>
+    <canvas id="canvas"></canvas>
 
     <script>
-        const canvas = document.getElementById('myCanvas');
-        const ctx = canvas.getContext('2d');
-
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-
-        // --- 설정값 (이 값들을 바꾸며 테스트 해보세요) ---
-        const lineCount = 80; // 그려질 선의 개수
-        const verticalSpread = canvas.height * 0.8; // 선들이 세로로 퍼지는 정도
-        const lineWidth = 1.2; // 선의 굵기
-        // ------------------------------------------------
-
-        // 선의 색상을 위한 그라디언트 생성
-        const gradient = ctx.createLinearGradient(0, 0, canvas.width, 0);
-        gradient.addColorStop(0.1, 'rgba(173, 216, 230, 0.9)'); // 밝은 파랑
-        gradient.addColorStop(0.8, 'rgba(128, 0, 128, 0.9)');   // 보라
+        const canvas = document.getElementById('canvas');
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
         
-        ctx.strokeStyle = gradient;
-        ctx.lineWidth = lineWidth;
-
-        // 선 그리기 (핵심 로직)
-        for (let i = 0; i < lineCount; i++) {
-            const t = i / (lineCount - 1); // 0과 1 사이의 값으로 정규화
-
-            // 시작점 (왼쪽)
-            const startX = 0;
-            const startY = (canvas.height / 2 - verticalSpread / 2) + t * verticalSpread;
-            
-            // 끝점 (오른쪽)
-            const endX = canvas.width;
-            const endY = (canvas.height / 2 + verticalSpread / 2) - t * verticalSpread;
-
-            // 2개의 제어점 위치 설정 (S자 곡선을 만드는 핵심)
-            const cp1x = canvas.width * 0.35; // 첫 번째 제어점 X
-            const cp1y = startY;             // 첫 번째 제어점 Y
-            const cp2x = canvas.width * 0.65; // 두 번째 제어점 X
-            const cp2y = endY;               // 두 번째 제어점 Y
-
-            ctx.beginPath();
-            ctx.moveTo(startX, startY);
-            
-            // bezierCurveTo(제어점1x, 제어점1y, 제어점2x, 제어점2y, 끝점x, 끝점y)
-            ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, endX, endY);
-            
-            ctx.stroke();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // 고해상도 디스플레이 지원
+        renderer.setClearColor(0xffffff, 1);
+        
+        // OrbitControls 추가
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true; // 부드러운 회전
+        controls.dampingFactor = 0.05;
+        controls.enableZoom = true; // 줌 가능
+        controls.enablePan = true; // 팬 가능
+        controls.autoRotate = false; // 자동 회전 비활성화 (GUI에서 제어)
+        controls.autoRotateSpeed = 2.0;
+        
+        const lines = [];
+        
+        // 조정 가능한 파라미터들
+        const params = {
+            width: 12,
+            numLayers: 200,
+            numPoints: 300,
+            twistIntensity: 0.5,
+            curvature: 0.3,
+            animationSpeed: 0.005,
+            waveIntensity: 0.02,
+            baseOpacity: 0.3,
+            opacityVariation: 0.5,
+            cameraDistance: 8,
+            autoRotate: true,
+            rotationSpeed: 0.3,
+            rotationX: 0,
+            rotationY: 0,
+            rotationZ: 0,
+            regenerate: function() {
+                regenerateSurface();
+            }
+        };
+        
+        camera.position.set(0, 0, params.cameraDistance);
+        
+        
+        // 전체 씬 회전을 위한 그룹 생성
+        const sceneGroup = new THREE.Group();
+        scene.add(sceneGroup);
+        
+        // 카메라 업데이트 함수
+        function updateCamera() {
+            camera.position.z = params.cameraDistance;
         }
+        
+        // 씬 회전 업데이트 함수
+        function updateRotation() {
+            sceneGroup.rotation.x = params.rotationX;
+            sceneGroup.rotation.y = params.rotationY;
+            sceneGroup.rotation.z = params.rotationZ;
+        }
+        
+        // 기존 라인들 제거 함수
+        function clearLines() {
+            lines.forEach(lineData => {
+                sceneGroup.remove(lineData.line);
+                lineData.line.geometry.dispose();
+                lineData.line.material.dispose();
+            });
+            lines.length = 0;
+        }
+        
+        // GUI 생성
+        const gui = new dat.GUI();
+        
+        // 구조 설정
+        const structureFolder = gui.addFolder('Surface Structure');
+        structureFolder.add(params, 'width', 5, 20).name('Width').onChange(regenerateSurface);
+        structureFolder.add(params, 'numLayers', 2, 300).name('Number of Layers').onChange(regenerateSurface);
+        structureFolder.add(params, 'numPoints', 100, 500).name('Points per Line').onChange(regenerateSurface);
+        structureFolder.add(params, 'twistIntensity', 0, 1).name('Twist Intensity').onChange(regenerateSurface);
+        structureFolder.add(params, 'curvature', 0, 1).name('Curvature').onChange(regenerateSurface);
+        structureFolder.open();
+        
+        // 애니메이션 설정
+        const animationFolder = gui.addFolder('Animation');
+        animationFolder.add(params, 'animationSpeed', 0, 0.02).name('Animation Speed');
+        animationFolder.add(params, 'waveIntensity', 0, 0.1).name('Wave Intensity');
+        animationFolder.add(params, 'autoRotate').name('Auto Rotate Camera').onChange((value) => {
+            controls.autoRotate = value;
+        });
+        animationFolder.add(params, 'rotationSpeed', 0.1, 1).name('Rotation Speed').onChange((value) => {
+            controls.autoRotateSpeed = value * 2;
+        });
+        animationFolder.open();
+        
+        // 수동 회전 설정
+        const rotationFolder = gui.addFolder('Manual Rotation');
+        rotationFolder.add(params, 'rotationX', -Math.PI, Math.PI).name('Rotation X').onChange(updateRotation);
+        rotationFolder.add(params, 'rotationY', -Math.PI, Math.PI).name('Rotation Y').onChange(updateRotation);
+        rotationFolder.add(params, 'rotationZ', -Math.PI, Math.PI).name('Rotation Z').onChange(updateRotation);
+        rotationFolder.open();
+        
+        // 외관 설정
+        const appearanceFolder = gui.addFolder('Appearance');
+        appearanceFolder.add(params, 'baseOpacity', 0.1, 1).name('Base Opacity');
+        appearanceFolder.add(params, 'opacityVariation', 0, 1).name('Opacity Variation');
+        appearanceFolder.add(params, 'cameraDistance', 3, 15).name('Camera Distance').onChange(updateCamera);
+        appearanceFolder.open();
+        
+        // 기타
+        gui.add(params, 'regenerate').name('Regenerate Surface');
+        
+        // 이미지와 동일한 보라-핑크 색상 팔레트
+        const colors = [
+            0x6366f1, // 진한 보라 (인디고)
+            0x7c3aed, // 보라
+            0x8b5cf6, // 밝은 보라
+            0xa855f7, // 연보라
+            0xc084fc, // 더 연한 보라
+            0xd8b4fe, // 라벤더
+            0xe879f9, // 핑크 보라
+            0xf0abfc, // 연핑크
+            0xf9a8d4  // 핑크
+        ];
+        
+        // 비틀린 면 생성
+        function createTwistedSurface() {
+            const width = params.width;
+            const numLayers = Math.floor(params.numLayers);
+            const numPoints = Math.floor(params.numPoints);
+            
+            for (let layer = 0; layer < numLayers; layer++) {
+                const points = [];
+                
+                // 각 층의 Y 위치 (-3에서 3까지)
+                const layerY = -3 + (layer / (numLayers - 1)) * 6;
+                
+                for (let i = 0; i < numPoints; i++) {
+                    // X 좌표 (-width/2에서 width/2까지)
+                    const x = -width/2 + (i / (numPoints - 1)) * width;
+                    
+                    // 왼쪽에서 오른쪽으로의 진행도 (0 ~ 1)
+                    const normalizedX = (i / (numPoints - 1));
+                    
+                    // 원래 Y 위치
+                    const originalY = layerY;
+                    
+                    // 부드러운 S-커브를 사용한 비틀림 (smoothstep 함수)
+                    const smoothX = normalizedX * normalizedX * (3 - 2 * normalizedX);
+                    
+                    // 완전 비틀림 상태의 Y좌표 (부드러운 전환)
+                    const fullTwistY = originalY * (1 - 2 * smoothX);
+                    
+                    // 비틀림 강도로 보간
+                    const finalY = originalY * (1 - params.twistIntensity) + fullTwistY * params.twistIntensity;
+                    
+                    // 양쪽에서 중앙으로 갈수록 부드러운 곡률 추가
+                    const curveFactor = Math.sin(normalizedX * Math.PI); // 0에서 시작해서 중앙에서 1, 끝에서 0
+                    const curveOffset = curveFactor * params.curvature * 0.8; // Y축 곡률
+                    
+                    // 더 자연스러운 3D 깊이 효과
+                    const depthCurve = Math.sin(normalizedX * Math.PI);
+                    const yInfluence = Math.abs(originalY) / 3;
+                    const centerPull = depthCurve * yInfluence * params.twistIntensity * 0.4;
+                    
+                    // Z축에도 곡률 추가 (더 입체적으로)
+                    const zCurve = curveFactor * params.curvature * 0.3;
+                    
+                    points.push(new THREE.Vector3(x, finalY + curveOffset, -centerPull - zCurve));
+                }
+                
+                // 곡선 생성 (부드러운 스플라인으로)
+                const curve = new THREE.CatmullRomCurve3(points);
+                const curvePoints = curve.getPoints(numPoints);
+                const geometry = new THREE.BufferGeometry().setFromPoints(curvePoints);
+                
+                // 색상 결정 (층에 따라)
+                const colorIndex = Math.floor((layer / numLayers) * colors.length);
+                const color = colors[Math.min(colorIndex, colors.length - 1)];
+                
+                // 투명도 결정 (중앙 부분이 더 진하게)
+                const centerDistance = Math.abs(layer / (numLayers - 1) - 0.5) * 2;
+                const opacity = params.baseOpacity + (1 - centerDistance) * params.opacityVariation;
+                
+                const material = new THREE.LineBasicMaterial({ 
+                    color: color,
+                    transparent: true,
+                    opacity: opacity
+                });
+                
+                const line = new THREE.Line(geometry, material);
+                sceneGroup.add(line);
+                lines.push({ 
+                    line, 
+                    originalPoints: [...curvePoints], 
+                    layer,
+                    baseOpacity: opacity
+                });
+            }
+        }
+        
+        // 면 재생성 함수
+        function regenerateSurface() {
+            clearLines();
+            createTwistedSurface();
+        }
+        
+        createTwistedSurface();
+        
+        // 애니메이션
+        let time = 0;
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            time += params.animationSpeed;
+            
+            // 각 선에 미세한 애니메이션 적용
+            lines.forEach((lineData, index) => {
+                const positions = lineData.line.geometry.attributes.position;
+                
+                for (let i = 0; i < positions.count; i++) {
+                    const originalPoint = lineData.originalPoints[i];
+                    
+                    // 미세한 파동 효과
+                    const wave = Math.sin(time * 2 + lineData.layer * 0.1 + i * 0.05) * params.waveIntensity;
+                    const wave2 = Math.cos(time * 1.5 + lineData.layer * 0.08 + i * 0.03) * params.waveIntensity * 0.75;
+                    
+                    positions.setX(i, originalPoint.x);
+                    positions.setY(i, originalPoint.y + wave);
+                    positions.setZ(i, originalPoint.z + wave2);
+                }
+                
+                positions.needsUpdate = true;
+                
+                // 투명도 애니메이션
+                const opacityWave = Math.sin(time + lineData.layer * 0.1) * 0.1;
+                lineData.line.material.opacity = Math.max(0.1, lineData.baseOpacity + opacityWave);
+            });
+            
+            // OrbitControls 업데이트
+            controls.update();
+            
+            renderer.render(scene, camera);
+        }
+        
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        animate();
     </script>
 </body>
 </html>
